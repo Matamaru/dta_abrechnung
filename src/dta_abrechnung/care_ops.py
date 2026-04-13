@@ -41,6 +41,7 @@ class CareOpsService:
         name: str,
         ik: str,
     ) -> Abrechnungszentrum:
+        self._require_tenant(tenant_id)
         center = Abrechnungszentrum(
             id=f"az-{uuid4().hex[:12]}",
             tenant_id=tenant_id,
@@ -57,6 +58,7 @@ class CareOpsService:
         ik: str,
         billing_ik: str | None = None,
     ) -> Leistungserbringer:
+        self._require_tenant(tenant_id)
         provider = Leistungserbringer(
             id=f"provider-{uuid4().hex[:12]}",
             tenant_id=tenant_id,
@@ -76,6 +78,9 @@ class CareOpsService:
         allowed_transports: list,
         billing_codes: dict[str, Decimal | str | int | float],
     ) -> Vertrag:
+        self._require_provider(provider_id)
+        if payer_id not in self.store.payers:
+            raise ValueError(f"Unknown payer: {payer_id}")
         contract = Vertrag(
             id=f"contract-{uuid4().hex[:12]}",
             provider_id=provider_id,
@@ -98,6 +103,7 @@ class CareOpsService:
         service_code: str,
         signed_at: datetime | None = None,
     ) -> Verordnung:
+        self._require_provider(provider_id)
         prescription = Verordnung(
             id=f"rx-{uuid4().hex[:12]}",
             provider_id=provider_id,
@@ -120,7 +126,7 @@ class CareOpsService:
         content: bytes,
         signed: bool = False,
     ) -> EvidenceDocument:
-        provider = self.store.providers[provider_id]
+        provider = self._require_provider(provider_id)
         document = EvidenceDocument(
             id=f"doc-{uuid4().hex[:12]}",
             tenant_id=provider.tenant_id,
@@ -149,8 +155,8 @@ class CareOpsService:
         signed: bool = False,
         source_system: str = "care_ops",
     ) -> Leistungsnachweis:
-        provider = self.store.providers[provider_id]
-        prescription = self.store.prescriptions[prescription_id]
+        provider = self._require_provider(provider_id)
+        prescription = self._require_prescription(prescription_id)
         if prescription.provider_id != provider_id:
             raise ValueError("Prescription does not belong to provider")
         entry = Leistungsnachweis(
@@ -173,7 +179,33 @@ class CareOpsService:
         return entry
 
     def link_document_to_service(self, service_id: str, document_id: str) -> Leistungsnachweis:
-        service = self.store.services[service_id]
+        if document_id not in self.store.evidence_documents:
+            raise ValueError(f"Unknown evidence document: {document_id}")
+        service = self._require_service(service_id)
         updated = replace(service, document_ids=[*service.document_ids, document_id])
         self.store.services[service_id] = updated
         return updated
+
+    def _require_tenant(self, tenant_id: str) -> Mandant:
+        try:
+            return self.store.tenants[tenant_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown tenant: {tenant_id}") from exc
+
+    def _require_provider(self, provider_id: str) -> Leistungserbringer:
+        try:
+            return self.store.providers[provider_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown provider: {provider_id}") from exc
+
+    def _require_prescription(self, prescription_id: str) -> Verordnung:
+        try:
+            return self.store.prescriptions[prescription_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown prescription: {prescription_id}") from exc
+
+    def _require_service(self, service_id: str) -> Leistungsnachweis:
+        try:
+            return self.store.services[service_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown service: {service_id}") from exc

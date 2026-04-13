@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from .domain import Fehlernachricht, InboundEvent, SubmissionStatus
+from .domain import Fehlernachricht, InboundEvent, SubmissionStatus, TransportFamily
 from .procedures import ProcedureAdapter
 from .store import PlatformStore
 
@@ -18,7 +18,7 @@ class InboundProcessingService:
         invoice_id: str,
         submission_id: str,
         raw_message: bytes,
-        transport,
+        transport: TransportFamily,
     ) -> list[InboundEvent]:
         events = []
         submission = self.store.submissions[submission_id]

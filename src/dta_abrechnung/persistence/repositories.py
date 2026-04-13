@@ -16,12 +16,55 @@ from ..storage import ObjectStorageRef
 from .models import AuditLedgerModel, ObjectStorageRefModel, PlanningSnapshotModel, ProviderModel, TenantModel
 
 
-def _sort_expression(model: type, allowed: dict[str, Any], sort_field: str, descending: bool):
+def _sort_expression(allowed: dict[str, Any], sort_field: str, descending: bool):
     try:
         column = allowed[sort_field]
     except KeyError as exc:
         raise ValueError(f"Unsupported sort field: {sort_field}") from exc
     return desc(column) if descending else asc(column)
+
+
+def _tenant_from_row(row: TenantModel) -> Mandant:
+    return Mandant(id=row.id, name=row.name, mode=TenantMode(row.mode), created_at=row.created_at)
+
+
+def _provider_from_row(row: ProviderModel) -> Leistungserbringer:
+    return Leistungserbringer(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        name=row.name,
+        ik=InstitutionCode(row.ik),
+        billing_ik=InstitutionCode(row.billing_ik) if row.billing_ik else None,
+    )
+
+
+def _object_storage_ref_from_row(row: ObjectStorageRefModel) -> ObjectStorageRef:
+    return ObjectStorageRef(
+        bucket=row.bucket,
+        key=row.object_key,
+        checksum_sha256=row.checksum_sha256,
+        size_bytes=row.size_bytes,
+        media_type=row.media_type,
+        encryption_key_id=row.encryption_key_id,
+        retention_class=row.retention_class,
+        legal_hold=row.legal_hold,
+        immutable=row.immutable,
+        residency=row.residency,
+        version_id=row.version_id,
+        created_at=row.created_at,
+    )
+
+
+def _planning_snapshot_from_row(row: PlanningSnapshotModel) -> PlanningSnapshot:
+    return PlanningSnapshot(
+        snapshot_id=row.snapshot_id,
+        tenant_id=row.tenant_id,
+        hub_id=row.hub_id,
+        planning_date=row.planning_date,
+        mission_count=row.mission_count,
+        extracted_at=row.extracted_at,
+        source_job_id=row.source_job_id,
+    )
 
 
 class SqlAlchemyAuditRepository:
@@ -82,7 +125,7 @@ class SqlAlchemyAuditRepository:
         stmt: Select[Any] = select(AuditLedgerModel)
         if tenant_id is not None:
             stmt = stmt.where(AuditLedgerModel.tenant_id == tenant_id)
-        stmt = stmt.order_by(_sort_expression(AuditLedgerModel, allowed, sort_field, descending))
+        stmt = stmt.order_by(_sort_expression(allowed, sort_field, descending))
         rows = self.session.execute(stmt).scalars().all()
         return [
             AuditEventView(
@@ -143,16 +186,16 @@ class SqlAlchemyTenantRepository:
         row = self.session.get(TenantModel, tenant_id)
         if row is None:
             return None
-        return Mandant(id=row.id, name=row.name, mode=TenantMode(row.mode), created_at=row.created_at)
+        return _tenant_from_row(row)
 
     def list(self, sort_field: str = "created_at", descending: bool = False) -> list[Mandant]:
         allowed = {
             "created_at": TenantModel.created_at,
             "name": TenantModel.name,
         }
-        stmt = select(TenantModel).order_by(_sort_expression(TenantModel, allowed, sort_field, descending))
+        stmt = select(TenantModel).order_by(_sort_expression(allowed, sort_field, descending))
         rows = self.session.execute(stmt).scalars().all()
-        return [Mandant(id=row.id, name=row.name, mode=TenantMode(row.mode), created_at=row.created_at) for row in rows]
+        return [_tenant_from_row(row) for row in rows]
 
 
 class SqlAlchemyProviderRepository:
@@ -208,13 +251,7 @@ class SqlAlchemyProviderRepository:
             return None
         if sensitive and context is not None:
             self.audit.record_sensitive_read(ProviderModel.__tablename__, provider_id, context, SensitiveReadTarget.PII)
-        return Leistungserbringer(
-            id=row.id,
-            tenant_id=row.tenant_id,
-            name=row.name,
-            ik=InstitutionCode(row.ik),
-            billing_ik=InstitutionCode(row.billing_ik) if row.billing_ik else None,
-        )
+        return _provider_from_row(row)
 
     def list_by_tenant(self, tenant_id: str, sort_field: str = "name", descending: bool = False) -> list[Leistungserbringer]:
         allowed = {
@@ -224,19 +261,10 @@ class SqlAlchemyProviderRepository:
         stmt = (
             select(ProviderModel)
             .where(ProviderModel.tenant_id == tenant_id)
-            .order_by(_sort_expression(ProviderModel, allowed, sort_field, descending))
+            .order_by(_sort_expression(allowed, sort_field, descending))
         )
         rows = self.session.execute(stmt).scalars().all()
-        return [
-            Leistungserbringer(
-                id=row.id,
-                tenant_id=row.tenant_id,
-                name=row.name,
-                ik=InstitutionCode(row.ik),
-                billing_ik=InstitutionCode(row.billing_ik) if row.billing_ik else None,
-            )
-            for row in rows
-        ]
+        return [_provider_from_row(row) for row in rows]
 
 
 class SqlAlchemyObjectStorageRefRepository:
@@ -304,20 +332,7 @@ class SqlAlchemyObjectStorageRefRepository:
             return None
         if sensitive and context is not None:
             self.audit.record_sensitive_read(ObjectStorageRefModel.__tablename__, ref_id, context, SensitiveReadTarget.EVIDENCE)
-        return ObjectStorageRef(
-            bucket=row.bucket,
-            key=row.object_key,
-            checksum_sha256=row.checksum_sha256,
-            size_bytes=row.size_bytes,
-            media_type=row.media_type,
-            encryption_key_id=row.encryption_key_id,
-            retention_class=row.retention_class,
-            legal_hold=row.legal_hold,
-            immutable=row.immutable,
-            residency=row.residency,
-            version_id=row.version_id,
-            created_at=row.created_at,
-        )
+        return _object_storage_ref_from_row(row)
 
 
 class SqlAlchemyPlanningSnapshotRepository:
@@ -372,9 +387,7 @@ class SqlAlchemyPlanningSnapshotRepository:
 
     def latest_snapshot(self, tenant_id: str, hub_id: str | None = None, context: AuditContext | None = None) -> PlanningSnapshot | None:
         stmt = select(PlanningSnapshotModel).where(PlanningSnapshotModel.tenant_id == tenant_id)
-        if hub_id is None:
-            stmt = stmt.where(PlanningSnapshotModel.hub_id.is_(None))
-        else:
+        if hub_id is not None:
             stmt = stmt.where(PlanningSnapshotModel.hub_id == hub_id)
         stmt = stmt.order_by(desc(PlanningSnapshotModel.extracted_at))
         row = self.session.execute(stmt).scalars().first()
@@ -382,15 +395,7 @@ class SqlAlchemyPlanningSnapshotRepository:
             return None
         if context is not None:
             self.audit.record_sensitive_read(PlanningSnapshotModel.__tablename__, row.snapshot_id, context, SensitiveReadTarget.PII)
-        return PlanningSnapshot(
-            snapshot_id=row.snapshot_id,
-            tenant_id=row.tenant_id,
-            hub_id=row.hub_id,
-            planning_date=row.planning_date,
-            mission_count=row.mission_count,
-            extracted_at=row.extracted_at,
-            source_job_id=row.source_job_id,
-        )
+        return _planning_snapshot_from_row(row)
 
     def list_for_tenant(
         self,
@@ -406,21 +411,8 @@ class SqlAlchemyPlanningSnapshotRepository:
             "mission_count": PlanningSnapshotModel.mission_count,
         }
         stmt = select(PlanningSnapshotModel).where(PlanningSnapshotModel.tenant_id == tenant_id)
-        if hub_id is None:
-            stmt = stmt.where(PlanningSnapshotModel.hub_id.is_(None))
-        else:
+        if hub_id is not None:
             stmt = stmt.where(PlanningSnapshotModel.hub_id == hub_id)
-        stmt = stmt.order_by(_sort_expression(PlanningSnapshotModel, allowed, sort_field, descending)).limit(limit)
+        stmt = stmt.order_by(_sort_expression(allowed, sort_field, descending)).limit(limit)
         rows = self.session.execute(stmt).scalars().all()
-        return [
-            PlanningSnapshot(
-                snapshot_id=row.snapshot_id,
-                tenant_id=row.tenant_id,
-                hub_id=row.hub_id,
-                planning_date=row.planning_date,
-                mission_count=row.mission_count,
-                extracted_at=row.extracted_at,
-                source_job_id=row.source_job_id,
-            )
-            for row in rows
-        ]
+        return [_planning_snapshot_from_row(row) for row in rows]

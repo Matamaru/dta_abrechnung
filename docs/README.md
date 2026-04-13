@@ -4,6 +4,9 @@ This folder documents the current software shape and the intended growth path fr
 
 ## Documents
 
+- [coding-standards.md](coding-standards.md): mandatory maintainability, modularity, naming, and docstring rules
+- [contributor-guide.md](contributor-guide.md): contributor workflow, boundary guidance, and documentation suggestions
+- [end-user-manual.md](end-user-manual.md): simple operator manual for the current private API stage
 - [getting-started.md](getting-started.md): local setup, migrations, API boot, and basic developer workflows
 - [current-status.md](current-status.md): current capability boundary, major gaps, and recommended build order
 - [architecture.md](architecture.md): subsystem boundaries, orchestration flow, and deployment model
@@ -19,6 +22,9 @@ The codebase is a functional platform scaffold. It now includes a SQLAlchemy-bas
 
 Use this folder to document:
 
+- coding and documentation rules
+- contributor workflows and review expectations
+- end-user operating guidance
 - architecture decisions
 - technical assumptions taken from specifications
 - procedure-specific payload constraints

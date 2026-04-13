@@ -9,6 +9,7 @@ from uuid import uuid4
 from .domain import (
     Abrechnungsfall,
     Korrektur,
+    Leistungsnachweis,
     OffenerPosten,
     ProcedureCode,
     Rechnung,
@@ -45,8 +46,8 @@ class BillingEngine:
         previous_invoice_id: str | None = None,
         correction_reason: str | None = None,
     ) -> Rechnung:
-        contract = self.store.contracts[contract_id]
-        provider = self.store.providers[contract.provider_id]
+        contract = self._require_contract(contract_id)
+        provider = self._require_provider(contract.provider_id)
         services = self._select_services(contract_id, service_ids, previous_invoice_id)
         if not services:
             raise ValueError("No services selected for invoice")
@@ -58,16 +59,13 @@ class BillingEngine:
         period_start = min(service.service_date for service in services)
         period_end = max(service.service_date for service in services)
         for service in services:
-            unit_price = service.unit_price or contract.billing_codes.get(service.service_code)
-            if unit_price is None:
-                raise ValueError(f"No price for service code {service.service_code}")
+            unit_price = self._price_for_service(contract, service)
             amount = unit_price * service.quantity
             bucket = grouped_lines[service.service_code]
             bucket["quantity"] += service.quantity
             bucket["amount"] += amount
             bucket["unit_price"] = unit_price
             grouped_cases[service.patient_id].append(service.id)
-            service.invoice_id = previous_invoice_id or "pending"
         line_items = [
             RechnungLine(
                 service_code=service_code,
@@ -94,7 +92,7 @@ class BillingEngine:
             procedure=contract.procedure,
             period_start=period_start,
             period_end=period_end,
-            issue_date=date.today(),
+            issue_date=datetime.now(UTC).date(),
             line_items=line_items,
             case_ids=[],
             total_amount=total_amount,
@@ -109,10 +107,7 @@ class BillingEngine:
         case_ids: list[str] = []
         for patient_id, patient_service_ids in grouped_cases.items():
             case_total = sum(
-                (
-                    (self.store.services[service_id].unit_price or contract.billing_codes[self.store.services[service_id].service_code])
-                    * self.store.services[service_id].quantity
-                )
+                self._price_for_service(contract, self.store.services[service_id]) * self.store.services[service_id].quantity
                 for service_id in patient_service_ids
             )
             billing_case = Abrechnungsfall(
@@ -153,10 +148,10 @@ class BillingEngine:
         contract_id: str,
         service_ids: list[str] | None,
         previous_invoice_id: str | None,
-    ) -> list:
-        contract = self.store.contracts[contract_id]
+    ) -> list[Leistungsnachweis]:
+        contract = self._require_contract(contract_id)
         if service_ids is not None:
-            services = [self.store.services[service_id] for service_id in service_ids]
+            services = [self._require_service(service_id) for service_id in service_ids]
         else:
             services = [
                 service
@@ -165,6 +160,46 @@ class BillingEngine:
                 and service.procedure == contract.procedure
                 and service.invoice_id is None
             ]
-        if previous_invoice_id is None:
-            return services
-        return services
+        if previous_invoice_id is not None:
+            previous_invoice = self.store.invoices[previous_invoice_id]
+            if (
+                previous_invoice.contract_id != contract_id
+                or previous_invoice.provider_id != contract.provider_id
+                or previous_invoice.payer_id != contract.payer_id
+                or previous_invoice.procedure != contract.procedure
+            ):
+                raise ValueError("Correction invoice must target the same contract and procedure")
+        validated: list[Leistungsnachweis] = []
+        for service in services:
+            if service.provider_id != contract.provider_id or service.procedure != contract.procedure:
+                raise ValueError("Selected service does not match the contract provider/procedure")
+            if previous_invoice_id is None and service.invoice_id is not None:
+                raise ValueError("Selected service has already been invoiced")
+            if previous_invoice_id is not None and service.invoice_id not in {None, previous_invoice_id}:
+                raise ValueError("Correction can only reuse services from the targeted original invoice")
+            validated.append(service)
+        return validated
+
+    def _price_for_service(self, contract, service: Leistungsnachweis) -> Decimal:
+        unit_price = service.unit_price or contract.billing_codes.get(service.service_code)
+        if unit_price is None:
+            raise ValueError(f"No price for service code {service.service_code}")
+        return unit_price
+
+    def _require_contract(self, contract_id: str):
+        try:
+            return self.store.contracts[contract_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown contract: {contract_id}") from exc
+
+    def _require_provider(self, provider_id: str):
+        try:
+            return self.store.providers[provider_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown provider: {provider_id}") from exc
+
+    def _require_service(self, service_id: str) -> Leistungsnachweis:
+        try:
+            return self.store.services[service_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown service: {service_id}") from exc

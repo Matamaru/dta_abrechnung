@@ -82,3 +82,34 @@ class RuntimeProfilesTest(unittest.TestCase):
         self.assertEqual(settings.read_replica_database.role, DatabaseRole.READ_REPLICA)
         self.assertEqual(settings.read_replica_database.profile, DatabaseProfile.POSTGRES_READ_REPLICA)
         self.assertEqual(settings.object_storage.bucket, "dta-objects")
+
+    def test_application_settings_reject_database_environment_mismatch(self) -> None:
+        settings = ApplicationSettings.from_env(
+            {
+                "DTA_ENVIRONMENT": "staging",
+                "DTA_DATABASE_PROFILE": "prod_postgres",
+                "DTA_DATABASE_URL": "postgresql+psycopg://app:secret@localhost:5432/dta_abrechnung",
+                "DTA_JWT_SIGNING_KEY": "jwt-secret",
+                "DTA_API_PRIVATE_BASE_URL": "https://private.example.internal",
+            },
+            env_file=Path(self.id() + ".missing"),
+        )
+        mismatched = DatabaseSettings(
+            profile=settings.primary_database.profile,
+            url=settings.primary_database.url,
+            environment=DeploymentEnvironment.PRODUCTION,
+            role=settings.primary_database.role,
+            application_name=settings.primary_database.application_name,
+        )
+        broken = ApplicationSettings(
+            environment=settings.environment,
+            primary_database=mismatched,
+            read_replica_database=settings.read_replica_database,
+            object_storage=settings.object_storage,
+            jwt=settings.jwt,
+            api=settings.api,
+            source_system=settings.source_system,
+        )
+
+        with self.assertRaises(ValueError):
+            broken.validate()

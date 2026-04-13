@@ -9,11 +9,11 @@ from uuid import uuid4
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
 
-from ..domain import Mandant
+from ..domain import Leistungserbringer, Mandant
 from ..persistence import PersistenceRuntime, build_runtime
 from ..planning import PlanningSnapshot
 from ..runtime import ApplicationSettings, DeploymentEnvironment
-from ..security import PrincipalRole
+from ..security import AuditEventView, PrincipalRole
 from ..storage import LocalObjectStore, ObjectStore
 from .auth import AuthContext, JwtCodec
 from .realtime import RealtimeBroker
@@ -63,6 +63,7 @@ def create_app(
             projection_runtime=projection,
             object_store=resolved_object_store,
             realtime_broker=broker,
+            realtime_channel_prefix=settings.api.realtime_channel_prefix,
         ),
         jwt_codec=JwtCodec(
             issuer=settings.jwt.issuer,
@@ -272,9 +273,10 @@ def create_app(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         api_state = get_api_state(websocket)
-        api_state.services.record_realtime_subscription(f"planning:{tenant_id}", auth)
+        channel = api_state.services.planning_channel(tenant_id)
+        api_state.services.record_realtime_subscription(channel, auth)
         await websocket.accept()
-        queue = await api_state.realtime_broker.subscribe(f"planning:{tenant_id}")
+        queue = await api_state.realtime_broker.subscribe(channel)
         try:
             await websocket.send_json({"event_type": "subscription.ready", "tenant_id": tenant_id})
             while True:
@@ -293,7 +295,7 @@ def create_app(
         except WebSocketDisconnect:
             pass
         finally:
-            await api_state.realtime_broker.unsubscribe(f"planning:{tenant_id}", queue)
+            await api_state.realtime_broker.unsubscribe(channel, queue)
 
     return app
 
@@ -384,7 +386,7 @@ def _tenant_response(tenant: Mandant) -> TenantResponse:
     return TenantResponse(id=tenant.id, name=tenant.name, mode=tenant.mode, created_at=tenant.created_at)
 
 
-def _provider_response(provider) -> ProviderResponse:
+def _provider_response(provider: Leistungserbringer) -> ProviderResponse:
     return ProviderResponse(
         id=provider.id,
         tenant_id=provider.tenant_id,
@@ -406,7 +408,7 @@ def _snapshot_response(snapshot: PlanningSnapshot) -> PlanningSnapshotResponse:
     )
 
 
-def _audit_event_response(event) -> AuditEventResponse:
+def _audit_event_response(event: AuditEventView) -> AuditEventResponse:
     return AuditEventResponse(
         event_id=event.event_id,
         occurred_at=event.occurred_at,

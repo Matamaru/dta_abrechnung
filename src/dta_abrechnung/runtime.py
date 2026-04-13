@@ -117,10 +117,14 @@ class ApplicationSettings:
         self.primary_database.validate()
         if self.primary_database.role != DatabaseRole.PRIMARY:
             raise ValueError("primary_database must use the primary role")
+        if self.primary_database.environment != self.environment:
+            raise ValueError("primary_database environment must match the application environment")
         if self.read_replica_database is not None:
             self.read_replica_database.validate()
             if self.read_replica_database.role != DatabaseRole.READ_REPLICA:
                 raise ValueError("read_replica_database must use the read_replica role")
+            if self.read_replica_database.environment != self.environment:
+                raise ValueError("read_replica_database environment must match the application environment")
         if not self.jwt.signing_key:
             raise ValueError("JWT signing key must not be empty")
         if not self.api.private_base_url:
@@ -206,9 +210,9 @@ def capabilities_for_profile(profile: DatabaseProfile) -> BackendCapabilities:
         supports_rls=True,
         supports_trigger_audit=True,
         supports_partitioning=True,
-            supports_synchronous_commit=False,
-            supports_read_replicas=True,
-        )
+        supports_synchronous_commit=False,
+        supports_read_replicas=True,
+    )
 
 
 def load_env_file(path: str | Path) -> dict[str, str]:

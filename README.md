@@ -94,6 +94,9 @@ source .venv/bin/activate
 ## Documentation
 
 - [docs/README.md](docs/README.md): docs index
+- [docs/coding-standards.md](docs/coding-standards.md): maintainability, modularity, naming, and docstring rules
+- [docs/contributor-guide.md](docs/contributor-guide.md): contributor workflow, review checklist, and documentation suggestions
+- [docs/end-user-manual.md](docs/end-user-manual.md): simple operator manual for the current API-based product surface
 - [docs/getting-started.md](docs/getting-started.md): local setup and day-one workflows
 - [docs/current-status.md](docs/current-status.md): implemented capabilities, gaps, and next build areas
 - [docs/architecture.md](docs/architecture.md): subsystem boundaries and execution flow

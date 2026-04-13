@@ -97,6 +97,7 @@ class ClassicDtaTransportAdapter:
         invoice_id: str,
         routing_target: RoutingTarget,
         main_artifact: SubmissionArtifact,
+        verfahrenskennung: str,
         evidence_artifacts: list[SubmissionArtifact],
         sender_ik: str,
     ) -> tuple[SubmissionEnvelope, str]:
@@ -106,7 +107,7 @@ class ClassicDtaTransportAdapter:
                 f"ABSENDER_IK={sender_ik}",
                 f"EMPFAENGER_IK={routing_target.receiver_ik}",
                 f"DATEINAME={main_artifact.filename}",
-                f"VERFAHRENSKENNUNG={main_artifact.filename[:5]}",
+                f"VERFAHRENSKENNUNG={verfahrenskennung}",
                 "KKS_VERSION=2.2",
                 f"KANAL={routing_target.channel}",
                 f"ROUTE={routing_target.address}",
@@ -150,20 +151,23 @@ class TiKimTransportAdapter:
         version: str,
     ) -> tuple[SubmissionEnvelope, str]:
         artifacts = [main_artifact, *evidence_artifacts]
-        attachments = [
-            KimAttachment(artifact=artifact, signature=self.bridge.sign_blob(artifact.content))
-            for artifact in artifacts
-        ]
+        attachments: list[KimAttachment] = []
+        for artifact in artifacts:
+            signature = self.bridge.sign_blob(artifact.content)
+            if not self.bridge.verify_blob(artifact.content, signature):
+                raise ValueError(f"Bridge signature verification failed for artifact {artifact.filename}")
+            attachments.append(KimAttachment(artifact=artifact, signature=signature))
+        service_identifier = self.bridge.resolve_service_identifier(
+            procedure=procedure,
+            message_type=message_type,
+            version=version,
+        )
         message = KimMessage(
             subject=main_artifact.filename.rsplit(".", 1)[0],
             recipient=routing_target.address,
-            service_identifier=self.bridge.resolve_service_identifier(
-                procedure=procedure,
-                message_type=message_type,
-                version=version,
-            ),
+            service_identifier=service_identifier,
             attachments=attachments,
-            headers={"X-KIM-Dienstkennung": self.bridge.resolve_service_identifier(procedure, message_type, version)},
+            headers={"X-KIM-Dienstkennung": service_identifier},
         )
         tracking_reference = self.bridge.send_kim(message)
         envelope = SubmissionEnvelope(
@@ -171,7 +175,7 @@ class TiKimTransportAdapter:
             artifacts=artifacts,
             metadata={
                 "submission_family": "ti_kim",
-                "service_identifier": message.service_identifier,
+                "service_identifier": service_identifier,
             },
         )
         return envelope, tracking_reference

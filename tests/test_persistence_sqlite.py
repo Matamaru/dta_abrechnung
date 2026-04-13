@@ -75,7 +75,6 @@ class SqlitePersistenceTest(unittest.TestCase):
         )
 
         with SqlAlchemyUnitOfWork(self.runtime, audit_context=self.audit_context) as uow:
-            assert uow.tenants and uow.providers and uow.object_storage_refs and uow.planning_snapshots
             uow.tenants.add(tenant, self.audit_context)
             uow.providers.add(provider, self.audit_context)
             uow.object_storage_refs.add("obj-1", tenant.id, object_ref, self.audit_context)
@@ -91,20 +90,20 @@ class SqlitePersistenceTest(unittest.TestCase):
             reason="compliance review",
         )
         with SqlAlchemyUnitOfWork(self.runtime, audit_context=read_context) as uow:
-            assert uow.tenants and uow.providers and uow.object_storage_refs and uow.planning_snapshots and uow.audit
             loaded_tenant = uow.tenants.get(tenant.id)
             loaded_provider = uow.providers.get(provider.id, context=read_context, sensitive=True)
             loaded_ref = uow.object_storage_refs.get("obj-1", context=read_context, sensitive=True)
             loaded_snapshot = uow.planning_snapshots.latest_snapshot(tenant.id, "hub-a", context=read_context)
+            loaded_snapshot_without_hub_filter = uow.planning_snapshots.latest_snapshot(tenant.id, context=read_context)
             uow.commit()
 
         self.assertEqual(loaded_tenant.name, "Nord Verbund")
         self.assertEqual(loaded_provider.billing_ik.value, "223456789")
         self.assertEqual(loaded_ref.checksum_sha256, object_ref.checksum_sha256)
         self.assertEqual(loaded_snapshot.mission_count, 4200)
+        self.assertEqual(loaded_snapshot_without_hub_filter.snapshot_id, snapshot.snapshot_id)
 
         with SqlAlchemyUnitOfWork(self.runtime, audit_context=read_context) as uow:
-            assert uow.audit and uow.tenants
             events = uow.audit.list_events(tenant_id=tenant.id)
             names = {(event.table_name, event.operation.value) for event in events}
             ordered = [tenant_record.name for tenant_record in uow.tenants.list(sort_field="name")]
@@ -120,7 +119,6 @@ class SqlitePersistenceTest(unittest.TestCase):
 
     def test_sort_whitelist_blocks_injection_like_input(self) -> None:
         with SqlAlchemyUnitOfWork(self.runtime, audit_context=self.audit_context) as uow:
-            assert uow.tenants
             uow.tenants.add(
                 Mandant(
                     id="tenant-2",
@@ -133,7 +131,6 @@ class SqlitePersistenceTest(unittest.TestCase):
             uow.commit()
 
         with SqlAlchemyUnitOfWork(self.runtime, audit_context=self.audit_context) as uow:
-            assert uow.tenants
             with self.assertRaises(ValueError):
                 uow.tenants.list(sort_field="name; DROP TABLE tenants")
 

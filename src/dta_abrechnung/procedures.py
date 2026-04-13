@@ -77,7 +77,7 @@ class ProcedureAdapter(ABC):
         invoice = store.invoices[invoice_id]
         return [
             (line.service_code, line.quantity, line.unit_price, line.amount)
-            for line in invoice.line_items
+            for line in sorted(invoice.line_items, key=lambda item: item.service_code)
         ]
 
 
@@ -109,22 +109,28 @@ class PflegeProcedureAdapter(ProcedureAdapter):
         invoice = store.invoices[invoice_id]
         provider = store.providers[invoice.provider_id]
         payer = store.payers[invoice.payer_id]
+        sender_ik = provider.effective_billing_ik.value
         if transport == TransportFamily.CLASSIC_DTA:
             filename = f"EPFL0{sequence_number:03d}"
             control_ref = f"{sequence_number:06d}"
-            segments = [
-                f"UNB+UNOA:3+{provider.ik.value}+{payer.ik.value}+{invoice.issue_date.strftime('%y%m%d')}:{datetime.now(UTC).strftime('%H%M')}+{control_ref}'",
+            created_at = datetime.now(UTC)
+            message_segments = [
                 "UNH+1+PLGA:D:96A:UN:PFLEGE'",
                 f"BGM+380+{invoice.id}+9'",
                 f"DTM+137:{invoice.issue_date.isoformat()}:102'",
             ]
             for service_code, quantity, unit_price, amount in self._invoice_lines(invoice_id, store):
-                segments.append(f"LIN+{service_code}'")
-                segments.append(f"QTY+47:{quantity}'")
-                segments.append(f"PRI+AAA:{unit_price}'")
-                segments.append(f"MOA+203:{amount}'")
-            segments.append(f"MOA+9:{invoice.total_amount}'")
-            segments.append("UNT+9+1'")
+                message_segments.append(f"LIN+{service_code}'")
+                message_segments.append(f"QTY+47:{quantity}'")
+                message_segments.append(f"PRI+AAA:{unit_price}'")
+                message_segments.append(f"MOA+203:{amount}'")
+            message_segments.append(f"MOA+9:{invoice.total_amount}'")
+            segment_count = len(message_segments) + 1
+            segments = [
+                f"UNB+UNOA:3+{sender_ik}+{payer.ik.value}+{invoice.issue_date.strftime('%y%m%d')}:{created_at.strftime('%H%M')}+{control_ref}'",
+                *message_segments,
+                f"UNT+{segment_count}+1'",
+            ]
             segments.append(f"UNZ+1+{control_ref}'")
             return SerializedPayload(
                 artifact=SubmissionArtifact(
@@ -143,6 +149,8 @@ class PflegeProcedureAdapter(ProcedureAdapter):
         SubElement(header, "Verfahrenskennung").text = "EPFL0"
         SubElement(header, "Version").text = self.version
         SubElement(header, "RechnungID").text = invoice.id
+        SubElement(header, "AbsenderIK").text = sender_ik
+        SubElement(header, "EmpfaengerIK").text = payer.ik.value
         body = SubElement(root, "Body")
         for service_code, quantity, unit_price, amount in self._invoice_lines(invoice_id, store):
             line = SubElement(body, "Leistung")
@@ -220,12 +228,13 @@ class HkpProcedureAdapter(ProcedureAdapter):
         invoice = store.invoices[invoice_id]
         provider = store.providers[invoice.provider_id]
         payer = store.payers[invoice.payer_id]
+        contract = store.contracts[invoice.contract_id]
         root = Element("HKPAbrechnungsnachricht")
         header = SubElement(root, "Header")
         SubElement(header, "Verfahrenskennung").text = "EHKP0"
         SubElement(header, "Nachrichtentyp").text = "ABR_0000"
         SubElement(header, "RechnungID").text = invoice.id
-        SubElement(header, "AbsenderIK").text = provider.ik.value
+        SubElement(header, "AbsenderIK").text = provider.effective_billing_ik.value
         SubElement(header, "EmpfaengerIK").text = payer.ik.value
         SubElement(header, "LogischeVersion").text = self.version
         body = SubElement(root, "Body")
@@ -238,7 +247,9 @@ class HkpProcedureAdapter(ProcedureAdapter):
                 line = SubElement(case_element, "Position")
                 SubElement(line, "Code").text = service.service_code
                 SubElement(line, "Menge").text = str(service.quantity)
-                price = service.unit_price or Decimal("0.00")
+                price = service.unit_price or contract.billing_codes.get(service.service_code)
+                if price is None:
+                    raise ValueError(f"No price for service code {service.service_code}")
                 SubElement(line, "Preis").text = str(price)
         filename = f"EHKP0_ABR_0000_{invoice.message_id}.xml"
         return SerializedPayload(
@@ -317,19 +328,26 @@ class Classic302ProcedureAdapter(ProcedureAdapter):
         invoice = store.invoices[invoice_id]
         provider = store.providers[invoice.provider_id]
         payer = store.payers[invoice.payer_id]
+        sender_ik = provider.effective_billing_ik.value
         filename = f"{self.verfahrenskennung}{sequence_number:03d}"
         control_ref = f"{sequence_number:06d}"
-        segments = [
-            f"UNB+UNOA:3+{provider.ik.value}+{payer.ik.value}+{invoice.issue_date.strftime('%y%m%d')}:{datetime.now(UTC).strftime('%H%M')}+{control_ref}'",
+        created_at = datetime.now(UTC)
+        message_segments = [
             f"UNH+1+{self.segment_label}:D:96A:UN:TP5'",
             f"BGM+380+{invoice.id}+9'",
         ]
         for service_code, quantity, unit_price, amount in self._invoice_lines(invoice_id, store):
-            segments.append(f"LIN+{service_code}'")
-            segments.append(f"QTY+47:{quantity}'")
-            segments.append(f"PRI+AAA:{unit_price}'")
-            segments.append(f"MOA+203:{amount}'")
-        segments.append(f"MOA+9:{invoice.total_amount}'")
+            message_segments.append(f"LIN+{service_code}'")
+            message_segments.append(f"QTY+47:{quantity}'")
+            message_segments.append(f"PRI+AAA:{unit_price}'")
+            message_segments.append(f"MOA+203:{amount}'")
+        message_segments.append(f"MOA+9:{invoice.total_amount}'")
+        segment_count = len(message_segments) + 1
+        segments = [
+            f"UNB+UNOA:3+{sender_ik}+{payer.ik.value}+{invoice.issue_date.strftime('%y%m%d')}:{created_at.strftime('%H%M')}+{control_ref}'",
+            *message_segments,
+            f"UNT+{segment_count}+1'",
+        ]
         segments.append(f"UNZ+1+{control_ref}'")
         return SerializedPayload(
             artifact=SubmissionArtifact(

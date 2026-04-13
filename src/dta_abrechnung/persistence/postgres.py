@@ -10,7 +10,36 @@ DECLARE
     tenant_id text := current_setting('app.current_tenant', true);
     reason text := current_setting('app.audit.reason', true);
     legal_basis text := current_setting('app.audit.legal_basis', true);
+    before_data jsonb := CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE to_jsonb(OLD) END;
+    after_data jsonb := CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE to_jsonb(NEW) END;
+    changed_fields_data jsonb;
+    row_identifier text;
 BEGIN
+    row_identifier := COALESCE(
+        after_data ->> 'id',
+        before_data ->> 'id',
+        after_data ->> 'snapshot_id',
+        before_data ->> 'snapshot_id',
+        'unknown'
+    );
+    changed_fields_data := CASE TG_OP
+        WHEN 'INSERT' THEN (
+            SELECT COALESCE(jsonb_agg(key ORDER BY key), '[]'::jsonb)
+            FROM jsonb_object_keys(after_data) AS key
+        )
+        WHEN 'DELETE' THEN (
+            SELECT COALESCE(jsonb_agg(key ORDER BY key), '[]'::jsonb)
+            FROM jsonb_object_keys(before_data) AS key
+        )
+        ELSE (
+            SELECT COALESCE(jsonb_agg(key ORDER BY key), '[]'::jsonb)
+            FROM (
+                SELECT key
+                FROM jsonb_object_keys(COALESCE(before_data, '{}'::jsonb) || COALESCE(after_data, '{}'::jsonb)) AS key
+                WHERE COALESCE(before_data -> key, 'null'::jsonb) IS DISTINCT FROM COALESCE(after_data -> key, 'null'::jsonb)
+            ) AS changed
+        )
+    END;
     INSERT INTO audit_ledger (
         event_id,
         occurred_at,
@@ -32,7 +61,7 @@ BEGIN
         md5(random()::text || clock_timestamp()::text),
         now(),
         TG_TABLE_NAME,
-        COALESCE(NEW.id::text, OLD.id::text, NEW.snapshot_id::text, OLD.snapshot_id::text),
+        row_identifier,
         COALESCE(actor_id, 'postgres-trigger'),
         COALESCE(actor_type, 'system')::actor_type,
         CASE TG_OP
@@ -44,9 +73,9 @@ BEGIN
         tenant_id,
         NULLIF(reason, ''),
         NULLIF(legal_basis, ''),
-        '{}'::jsonb,
-        CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE to_jsonb(OLD) END,
-        CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE to_jsonb(NEW) END,
+        changed_fields_data,
+        before_data,
+        after_data,
         NULL
     );
     RETURN COALESCE(NEW, OLD);

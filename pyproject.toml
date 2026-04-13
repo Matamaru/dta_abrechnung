@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dta-abrechnung"
-version = "0.1.0"
+version = "0.1.1"
 description = "National DTA billing platform scaffold for SGB V and SGB XI"
 requires-python = ">=3.12"
 dependencies = [

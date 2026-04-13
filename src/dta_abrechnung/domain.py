@@ -80,6 +80,10 @@ class Leistungserbringer:
     ik: InstitutionCode
     billing_ik: InstitutionCode | None = None
 
+    @property
+    def effective_billing_ik(self) -> InstitutionCode:
+        return self.billing_ik or self.ik
+
 
 @dataclass(slots=True)
 class ProcedureCapability:

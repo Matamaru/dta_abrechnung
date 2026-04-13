@@ -44,8 +44,14 @@ class PayerMasterDataService:
         transport: TransportFamily,
         ti_bridge: TiBridge | None = None,
     ) -> RoutingTarget:
-        payer = self.store.payers[payer_id]
-        capability = payer.capabilities[procedure]
+        try:
+            payer = self.store.payers[payer_id]
+        except KeyError as exc:
+            raise ValueError(f"Unknown payer: {payer_id}") from exc
+        try:
+            capability = payer.capabilities[procedure]
+        except KeyError as exc:
+            raise ValueError(f"Payer {payer_id} does not expose capability for {procedure.value}") from exc
         if transport not in capability.allowed_transports:
             raise ValueError(f"{procedure} does not support transport {transport}")
         if transport == TransportFamily.CLASSIC_DTA:
@@ -83,4 +89,7 @@ class PayerMasterDataService:
         )
 
     def add_data_acceptance_change(self, payer_id: str, note: str) -> None:
-        self.store.payers[payer_id].data_acceptance_changes.append(note)
+        try:
+            self.store.payers[payer_id].data_acceptance_changes.append(note)
+        except KeyError as exc:
+            raise ValueError(f"Unknown payer: {payer_id}") from exc

@@ -117,32 +117,38 @@ class JwtCodec:
         return self._encode(payload)
 
     def decode(self, token: str) -> PrincipalClaims:
-        header_segment, payload_segment, signature_segment = token.split(".")
-        signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
-        expected = _b64url_encode(hmac.new(self.signing_key, signing_input, hashlib.sha256).digest())
-        if not hmac.compare_digest(expected, signature_segment):
-            raise ValueError("Invalid token signature")
-        header = json.loads(_b64url_decode(header_segment))
-        if header.get("alg") != "HS256":
-            raise ValueError("Unsupported JWT algorithm")
-        payload = json.loads(_b64url_decode(payload_segment))
-        if payload.get("iss") != self.issuer:
-            raise ValueError("Invalid token issuer")
-        if payload.get("aud") != self.audience:
-            raise ValueError("Invalid token audience")
-        expires_at = int(payload.get("exp", 0))
-        if expires_at < int(datetime.now(UTC).timestamp()):
-            raise ValueError("Token has expired")
-        roles = frozenset(PrincipalRole(role) for role in payload.get("roles", []))
-        return PrincipalClaims(
-            subject=str(payload["sub"]),
-            actor_type=ActorType(payload["actor_type"]),
-            roles=roles,
-            token_kind=TokenKind(payload["token_kind"]),
-            tenant_id=payload.get("tenant_id"),
-            source_system=str(payload.get("source_system", "api")),
-            email=payload.get("email"),
-        )
+        try:
+            header_segment, payload_segment, signature_segment = token.split(".")
+        except ValueError as exc:
+            raise ValueError("Malformed JWT token") from exc
+        try:
+            signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
+            expected = _b64url_encode(hmac.new(self.signing_key, signing_input, hashlib.sha256).digest())
+            if not hmac.compare_digest(expected, signature_segment):
+                raise ValueError("Invalid token signature")
+            header = json.loads(_b64url_decode(header_segment))
+            if header.get("alg") != "HS256":
+                raise ValueError("Unsupported JWT algorithm")
+            payload = json.loads(_b64url_decode(payload_segment))
+            if payload.get("iss") != self.issuer:
+                raise ValueError("Invalid token issuer")
+            if payload.get("aud") != self.audience:
+                raise ValueError("Invalid token audience")
+            expires_at = int(payload.get("exp", 0))
+            if expires_at < int(datetime.now(UTC).timestamp()):
+                raise ValueError("Token has expired")
+            roles = frozenset(PrincipalRole(role) for role in payload.get("roles", []))
+            return PrincipalClaims(
+                subject=str(payload["sub"]),
+                actor_type=ActorType(payload["actor_type"]),
+                roles=roles,
+                token_kind=TokenKind(payload["token_kind"]),
+                tenant_id=payload.get("tenant_id"),
+                source_system=str(payload.get("source_system", "api")),
+                email=payload.get("email"),
+            )
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Malformed JWT payload") from exc
 
     def _encode(self, payload: dict[str, Any]) -> str:
         header = {"typ": "JWT", "alg": "HS256"}

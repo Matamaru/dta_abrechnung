@@ -30,6 +30,7 @@ class ApiServices:
     projection_runtime: PersistenceRuntime
     object_store: ObjectStore
     realtime_broker: RealtimeBroker
+    realtime_channel_prefix: str = "planning"
 
     def create_tenant(self, name: str, mode: TenantMode, auth: AuthContext, reason: str | None, legal_basis: str | None) -> Mandant:
         tenant = Mandant(
@@ -40,21 +41,18 @@ class ApiServices:
         )
         audit_context = auth.to_audit_context(reason=reason, legal_basis=legal_basis, tenant_id=tenant.id)
         with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=audit_context) as uow:
-            assert uow.tenants
             uow.tenants.add(tenant, audit_context)
             uow.commit()
         return tenant
 
     def list_tenants(self, auth: AuthContext) -> list[Mandant]:
         with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=auth.to_audit_context()) as uow:
-            assert uow.tenants
             if auth.tenant_id and not auth.has_role(PrincipalRole.PLATFORM_ADMIN):
                 return [tenant for tenant in uow.tenants.list(sort_field="name") if tenant.id == auth.tenant_id]
             return uow.tenants.list(sort_field="name")
 
     def get_tenant(self, tenant_id: str, auth: AuthContext) -> Mandant | None:
         with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=auth.to_audit_context(tenant_id=tenant_id)) as uow:
-            assert uow.tenants
             return uow.tenants.get(tenant_id)
 
     def create_provider(
@@ -76,7 +74,6 @@ class ApiServices:
         )
         audit_context = auth.to_audit_context(reason=reason, legal_basis=legal_basis, tenant_id=tenant_id)
         with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=audit_context) as uow:
-            assert uow.providers and uow.tenants
             if uow.tenants.get(tenant_id) is None:
                 raise LookupError(f"Unknown tenant: {tenant_id}")
             uow.providers.add(provider, audit_context)
@@ -85,15 +82,18 @@ class ApiServices:
 
     def get_provider(self, provider_id: str, auth: AuthContext) -> Leistungserbringer | None:
         with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=auth.to_audit_context()) as uow:
-            assert uow.providers
             provider = uow.providers.get(provider_id, context=auth.to_audit_context(), sensitive=True)
             uow.commit()
             return provider
 
     def list_providers(self, tenant_id: str, auth: AuthContext) -> list[Leistungserbringer]:
-        with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=auth.to_audit_context(tenant_id=tenant_id)) as uow:
-            assert uow.providers
-            return uow.providers.list_by_tenant(tenant_id, sort_field="name")
+        audit_context = auth.to_audit_context(tenant_id=tenant_id)
+        with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=audit_context) as uow:
+            providers = uow.providers.list_by_tenant(tenant_id, sort_field="name")
+            for provider in providers:
+                uow.audit.record_sensitive_read("providers", provider.id, audit_context, SensitiveReadTarget.PII)
+            uow.commit()
+            return providers
 
     async def store_planning_snapshot(
         self,
@@ -130,13 +130,12 @@ class ApiServices:
         )
         audit_context = auth.to_audit_context(reason=reason, legal_basis=legal_basis, tenant_id=tenant_id)
         with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=audit_context) as uow:
-            assert uow.object_storage_refs and uow.planning_snapshots
             uow.object_storage_refs.add(object_ref_id, tenant_id, object_ref, audit_context)
             uow.planning_snapshots.store_snapshot(snapshot, object_ref_id, audit_context)
             uow.commit()
         await self.realtime_broker.publish(
             self.realtime_broker.make_event(
-                channel=self._planning_channel(tenant_id),
+                channel=self.planning_channel(tenant_id),
                 event_type="planning.snapshot.stored",
                 tenant_id=tenant_id,
                 payload={
@@ -152,13 +151,11 @@ class ApiServices:
 
     def latest_planning_snapshot(self, tenant_id: str, hub_id: str | None, auth: AuthContext) -> PlanningSnapshot | None:
         with SqlAlchemyUnitOfWork(self.projection_runtime, audit_context=None) as uow:
-            assert uow.planning_snapshots
             snapshot = uow.planning_snapshots.latest_snapshot(tenant_id, hub_id=hub_id, context=None)
         if snapshot is None:
             return None
         audit_context = auth.to_audit_context(tenant_id=tenant_id)
         with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=audit_context) as uow:
-            assert uow.audit
             uow.audit.record_sensitive_read("planning_snapshots", snapshot.snapshot_id, audit_context, SensitiveReadTarget.PII)
             uow.commit()
         return snapshot
@@ -170,9 +167,13 @@ class ApiServices:
         auth: AuthContext,
         limit: int = 50,
     ) -> list[PlanningSnapshot]:
+        audit_context = auth.to_audit_context(tenant_id=tenant_id)
         with SqlAlchemyUnitOfWork(self.projection_runtime, audit_context=None) as uow:
-            assert uow.planning_snapshots
             snapshots = uow.planning_snapshots.list_for_tenant(tenant_id, hub_id=hub_id, limit=limit)
+        with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=audit_context) as uow:
+            for snapshot in snapshots:
+                uow.audit.record_sensitive_read("planning_snapshots", snapshot.snapshot_id, audit_context, SensitiveReadTarget.PII)
+            uow.commit()
         return snapshots
 
     def projection_freshness(self, tenant_id: str, hub_id: str | None, auth: AuthContext) -> ProjectionFreshness | None:
@@ -191,9 +192,13 @@ class ApiServices:
 
     def list_audit_events(self, auth: AuthContext, tenant_id: str | None = None) -> list[AuditEventView]:
         scoped_tenant = tenant_id or auth.tenant_id
-        with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=auth.to_audit_context(tenant_id=scoped_tenant)) as uow:
-            assert uow.audit
-            return uow.audit.list_events(tenant_id=scoped_tenant, sort_field="occurred_at", descending=True)
+        audit_context = auth.to_audit_context(tenant_id=scoped_tenant)
+        with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=audit_context) as uow:
+            uow.audit.record_sensitive_read("audit_ledger", scoped_tenant or "global", audit_context, SensitiveReadTarget.AUDIT_EXPORT)
+            uow.flush()
+            events = uow.audit.list_events(tenant_id=scoped_tenant, sort_field="occurred_at", descending=True)
+            uow.commit()
+            return events
 
     def record_realtime_subscription(self, channel: str, auth: AuthContext) -> None:
         audit_context = auth.to_audit_context(tenant_id=auth.tenant_id)
@@ -213,7 +218,6 @@ class ApiServices:
             after_state={"channel": channel},
         )
         with SqlAlchemyUnitOfWork(self.primary_runtime, audit_context=audit_context) as uow:
-            assert uow.audit
             uow.audit.record_event(event)
             uow.commit()
 
@@ -228,6 +232,5 @@ class ApiServices:
             "dialect": runtime.settings.dialect,
         }
 
-    @staticmethod
-    def _planning_channel(tenant_id: str) -> str:
-        return f"planning:{tenant_id}"
+    def planning_channel(self, tenant_id: str) -> str:
+        return f"{self.realtime_channel_prefix}:{tenant_id}"

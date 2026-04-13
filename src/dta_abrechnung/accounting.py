@@ -46,7 +46,7 @@ class AccountingExportService:
                 "status",
             ]
         )
-        for open_item in self.store.open_items.values():
+        for open_item in sorted(self.store.open_items.values(), key=lambda item: item.invoice_id):
             invoice = self.store.invoices[open_item.invoice_id]
             payer = self.store.payers[invoice.payer_id]
             provider = self.store.providers[invoice.provider_id]
@@ -55,7 +55,7 @@ class AccountingExportService:
                     invoice.id,
                     invoice.procedure.value,
                     payer.ik.value,
-                    provider.ik.value,
+                    provider.effective_billing_ik.value,
                     str(open_item.due_amount),
                     str(open_item.paid_amount),
                     str(open_item.due_amount - open_item.paid_amount),

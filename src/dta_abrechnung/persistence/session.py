@@ -24,6 +24,8 @@ def build_engine(settings: DatabaseSettings) -> Engine:
     connect_args: dict[str, object] = {}
     if settings.is_sqlite:
         connect_args["check_same_thread"] = False
+    elif settings.is_postgres:
+        connect_args["application_name"] = settings.application_name
     engine = create_engine(
         settings.url,
         echo=settings.echo_sql,

@@ -54,7 +54,9 @@ class NationalDtaPlatform:
     ) -> "NationalDtaPlatform":
         runtime = build_runtime(settings)
         resolved_object_store = object_store
-        if resolved_object_store is None and settings.profile == DatabaseProfile.LOCAL_SQLITE:
+        if resolved_object_store is None and (
+            settings.profile == DatabaseProfile.LOCAL_SQLITE or local_object_root is not None
+        ):
             resolved_object_store = LocalObjectStore(local_object_root or Path(".local-object-store"))
         return cls(runtime=runtime, object_store=resolved_object_store)
 
@@ -92,12 +94,13 @@ class NationalDtaPlatform:
         payload = adapter.serialize(invoice_id, selected_transport, self.store, evidence_bundle, sequence_number)
         evidence_artifacts = adapter.package_evidence(invoice_id, selected_transport, evidence_bundle)
         provider = self.store.providers[invoice.provider_id]
-        sender_ik = (provider.billing_ik or provider.ik).value
+        sender_ik = provider.effective_billing_ik.value
         if selected_transport == TransportFamily.CLASSIC_DTA:
             envelope, tracking_reference = self.classic_transport.submit(
                 invoice_id=invoice_id,
                 routing_target=route,
                 main_artifact=payload.artifact,
+                verfahrenskennung=payload.verfahrenskennung,
                 evidence_artifacts=evidence_artifacts,
                 sender_ik=sender_ik,
             )

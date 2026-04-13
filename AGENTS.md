@@ -26,6 +26,18 @@ The goal for contributors and coding agents is to harden this scaffold into a pr
 - Keep application database access inside SQLAlchemy repositories and unit-of-work boundaries.
 - Do not build SQL strings from user input. Use bound parameters and whitelisted sort/filter fields.
 - Raw SQL belongs only in migrations, DDL, triggers, or narrowly reviewed Postgres-only setup.
+- Keep modules focused. If a file starts to accumulate unrelated responsibilities, split it before adding more code.
+- Prefer thin orchestration layers and explicit service boundaries over large god classes or catch-all utility modules.
+- Keep classes and functions small enough that their responsibility is obvious without scrolling through multiple screens.
+- Every class, function, and method must have a short docstring that explains:
+  - what it does
+  - params
+  - returns
+- Docstrings should be precise, not verbose. Describe behavior and intent, not line-by-line implementation.
+- Public APIs, repositories, and services must use explicit types and predictable naming. Avoid ambiguous names like `data`, `info`, or `handle` when a domain term is known.
+- Prefer composition over inheritance unless inheritance is already the established pattern in that subsystem.
+- Avoid circular dependencies. Shared concepts belong in `domain.py`, `runtime.py`, `security.py`, or another deliberate boundary module, not in cross-imported service files.
+- If a change adds a new workflow, update the relevant documentation in `docs/` in the same change.
 
 ## Repo Map
 
@@ -68,6 +80,9 @@ The goal for contributors and coding agents is to harden this scaffold into a pr
 
 ## Documentation Expectations
 
+- Follow [docs/coding-standards.md](/home/chief/Projects/dta_abrechnung/docs/coding-standards.md) for structure, naming, docstrings, and module boundaries.
+- Follow [docs/contributor-guide.md](/home/chief/Projects/dta_abrechnung/docs/contributor-guide.md) when adding features, refactors, tests, or docs.
+- Keep [docs/end-user-manual.md](/home/chief/Projects/dta_abrechnung/docs/end-user-manual.md) aligned with the real user-facing behavior of the system.
 - Update [docs/architecture.md](/home/chief/Projects/dta_abrechnung/docs/architecture.md) when subsystem boundaries change.
 - Update [docs/domain-model.md](/home/chief/Projects/dta_abrechnung/docs/domain-model.md) when new core entities or lifecycle states are introduced.
 - Update [docs/persistence-and-security.md](/home/chief/Projects/dta_abrechnung/docs/persistence-and-security.md) when runtime, audit, storage, or SQL-safety rules change.

@@ -165,12 +165,17 @@ class PrivateApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.json()["billing_ik"], "223456789")
 
+        list_response = await self.client.get(f"/api/v1/tenants/{tenant_id}/providers", headers=tenant_headers)
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual([provider["id"] for provider in list_response.json()], [provider_id])
+
         audit_response = await self.client.get(f"/api/v1/audit/events?tenant_id={tenant_id}", headers=admin_headers)
         self.assertEqual(audit_response.status_code, 200)
         operations = {(event["table_name"], event["operation"]) for event in audit_response.json()}
         self.assertIn(("tenants", "insert"), operations)
         self.assertIn(("providers", "insert"), operations)
         self.assertIn(("providers", "read"), operations)
+        self.assertIn(("audit_ledger", "read"), operations)
 
     async def test_tenant_isolation_blocks_cross_tenant_provider_access(self) -> None:
         admin_headers = {"Authorization": f"Bearer {self._token(subject='admin', roles={PrincipalRole.PLATFORM_ADMIN})}"}
