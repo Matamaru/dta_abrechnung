@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.codex
+.env
+.local-object-store/
+*.sqlite3
+*.db
